@@ -4,13 +4,18 @@
 
 #define IR_RECV_PIN       5   // KY-022 OUT
 
-unsigned long windowStart = 0;
-int detectCount = 0;
 
 uint8_t peerMac[] = { 0x80, 0xF3, 0xDA, 0x41, 0xC9, 0xD4 };
 uint8_t theirState  = 0;  // last value received from the other board
 
-uint8_t currentDoorState = 0;
+uint8_t currentUnlockState = 0;
+
+int detectCount = 0;
+unsigned long window_gap = 0;
+unsigned long detectStart = 0;
+unsigned resultCounter = 0;
+bool isFirstTime = true;
+bool isDoorTrulyOpen = false;
 
 // Check send status
 void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
@@ -24,7 +29,7 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     theirState = incomingData[0];
     Serial.print("Got theirState = ");
     Serial.println(theirState);
-    currentDoorState = (theirState == 1) ? 1 : 0;
+    currentUnlockState = (theirState == 1) ? 1 : 0;
   }
 }
 
@@ -59,14 +64,48 @@ void setup() {
   }
 
   Serial.println("ESP-NOW two-way node ready.");
-
+  
   pinMode(IR_RECV_PIN, INPUT);
-  windowStart = millis();
   Serial.println("IR detection system started.");
 }
 
+
+
 void loop() {
-  if (currentDoorState == 1) {
+  if (currentUnlockState == 1 && isDoorTrulyOpen == false) {
+    // Lock is open, Door is open?
+    if (isFirstTime) window_gap = millis();
+    isFirstTime = false;
+    unsigned long now = millis();
+
+    int unlockState = digitalRead(IR_RECV_PIN);
+
+    if (digitalRead(IR_RECV_PIN) == LOW) {
+      detectCount++;
+    }
+
+    // After 1000 ms, evaluate the result
+    if (now-window_gap >= 5000) {
+
+      // No detection in 5 seconds means door is truly open
+      int result = (detectCount == 0) ? 1 : 0;
+
+      Serial.print("IR result = ");
+      Serial.print(result);
+      Serial.print("  (detectCount = ");
+      Serial.print(detectCount);
+      Serial.println(")");
+      
+      if (result) {
+        Serial.println("Door is truly open now.");
+        isDoorTrulyOpen = true;
+      }
+
+      window_gap = now;
+      detectCount = 0;
+    }
+    delay(1);
+  } else if (isDoorTrulyOpen == true) {
     // Door is open, monitor IR receiver
     unsigned long now = millis();
 
@@ -77,7 +116,7 @@ void loop() {
     }
 
     // After 1000 ms, evaluate the result
-    if (now - windowStart >= 1000) {
+    if (now-window_gap >= 1000) {
 
       int result = (detectCount >= 8) ? 1 : 0;
 
@@ -88,21 +127,32 @@ void loop() {
       Serial.println(")");
       
       if (result) {
-        currentDoorState = 0;
+        detectStart = millis();
+        resultCounter++;
+        if (now - detectStart >= 5000 && resultCounter >= 5) {
+          Serial.println("Door has been closed now.");
+          currentUnlockState = 0;
+          isDoorTrulyOpen = false;
+          esp_err_t result = esp_now_send(peerMac, &currentUnlockState, sizeof(currentUnlockState));
 
-        esp_err_t result = esp_now_send(peerMac, &currentDoorState, sizeof(currentDoorState));
-
-        Serial.print("Sent currentDoorState = ");
-        Serial.print(currentDoorState);
-        Serial.print("  result = ");
-        Serial.println(result == ESP_OK ? "OK" : "ERROR");
+          Serial.print("Sent currentUnlockState = ");
+          Serial.print(currentUnlockState);
+          Serial.print("  result = ");
+          Serial.println(result == ESP_OK ? "OK" : "ERROR");
+        }
+      } else {
+        // Reset for next window
+        resultCounter = 0;
+        detectStart = 0;
       }
+      window_gap = now;
       detectCount = 0;
-      windowStart = now;
     }
     delay(1);
   } else {
     // Door is closed, do nothing
+    window_gap = 0;
+    isFirstTime = true;
     delay(100);
   }
 }
