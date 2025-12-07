@@ -139,6 +139,11 @@ void loop() {
           Serial.print(currentUnlockState);
           Serial.print("  result = ");
           Serial.println(result == ESP_OK ? "OK" : "ERROR");
+        } else {
+          // Not continous for 5 seconds, reset
+          Serial.println("IR detection unstable, resetting counters.");
+          resultCounter = 0;
+          detectStart = 0;
         }
       } else {
         // Reset for next window
