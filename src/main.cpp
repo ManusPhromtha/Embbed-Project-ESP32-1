@@ -137,6 +137,10 @@ void loop() {
       Serial.println(")");
       
       if (result == 1) {
+        // Turn off buzzer
+        openStart = now;
+        digitalWrite(BUZZER_PIN, LOW);
+        
         if (resultCounter == 0) detectStart = now;
         resultCounter++;
         if (now - detectStart >= CLOSE_DETECT_TIME && resultCounter >= 5) {
