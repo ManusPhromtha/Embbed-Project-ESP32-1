@@ -85,9 +85,8 @@ void loop() {
     }
 
     // After 1000 ms, evaluate the result
-    if (now-window_gap >= 5000) {
-
-      // No detection in 5 seconds means door is truly open
+    if (now-window_gap >= 2000) {
+      // No detection in 2 seconds means door is truly open
       int result = (detectCount == 0) ? 1 : 0;
 
       Serial.print("IR result = ");
@@ -139,7 +138,7 @@ void loop() {
           Serial.print(currentUnlockState);
           Serial.print("  result = ");
           Serial.println(result == ESP_OK ? "OK" : "ERROR");
-        } else {
+        } else if (now - detectStart >= 5000) {
           // Not continous for 5 seconds, reset
           Serial.println("IR detection unstable, resetting counters.");
           resultCounter = 0;
