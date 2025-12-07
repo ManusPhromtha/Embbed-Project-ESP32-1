@@ -3,7 +3,11 @@
 #include <esp_now.h>
 
 #define IR_RECV_PIN       5   // KY-022 OUT
+#define BUZZER_PIN       21   // KY-022 OUT
 
+#define LEAST_DETECT_COUNT 8 // Per 1000 ms
+#define CLOSE_DETECT_TIME  4000
+#define MAX_OPEN_TIME  30000
 
 uint8_t peerMac[] = { 0x80, 0xF3, 0xDA, 0x41, 0xC9, 0xD4 };
 uint8_t theirState  = 0;  // last value received from the other board
@@ -13,9 +17,13 @@ uint8_t currentUnlockState = 0;
 int detectCount = 0;
 unsigned long window_gap = 0;
 unsigned long detectStart = 0;
+unsigned long openStart = 0;
 unsigned resultCounter = 0;
-bool isFirstTime = true;
 bool isDoorTrulyOpen = false;
+
+unsigned long previousMillis = 0;
+const unsigned long interval = 500;  // 500 ms ON/OFF interval
+bool buzzerState = false;
 
 // Check send status
 void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
@@ -67,6 +75,9 @@ void setup() {
   
   pinMode(IR_RECV_PIN, INPUT);
   Serial.println("IR detection system started.");
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 }
 
 
@@ -74,13 +85,12 @@ void setup() {
 void loop() {
   if (currentUnlockState == 1 && isDoorTrulyOpen == false) {
     // Lock is open, Door is open?
-    if (isFirstTime) window_gap = millis();
-    isFirstTime = false;
+    if (window_gap == 0) window_gap = millis();
     unsigned long now = millis();
 
-    int unlockState = digitalRead(IR_RECV_PIN);
+    int irState = digitalRead(IR_RECV_PIN);
 
-    if (digitalRead(IR_RECV_PIN) == LOW) {
+    if (irState == LOW) {
       detectCount++;
     }
 
@@ -107,6 +117,7 @@ void loop() {
   } else if (isDoorTrulyOpen == true) {
     // Door is open, monitor IR receiver
     unsigned long now = millis();
+    if (openStart == 0) openStart = now;
 
     int unlockState = digitalRead(IR_RECV_PIN);
 
@@ -117,7 +128,7 @@ void loop() {
     // After 1000 ms, evaluate the result
     if (now-window_gap >= 1000) {
 
-      int result = (detectCount >= 8) ? 1 : 0;
+      int result = (detectCount >= LEAST_DETECT_COUNT) ? 1 : 0;
 
       Serial.print("IR result = ");
       Serial.print(result);
@@ -128,17 +139,18 @@ void loop() {
       if (result == 1) {
         if (resultCounter == 0) detectStart = now;
         resultCounter++;
-        if (now - detectStart >= 5000 && resultCounter >= 5) {
+        if (now - detectStart >= CLOSE_DETECT_TIME && resultCounter >= 5) {
           Serial.println("Door has been closed now.");
           currentUnlockState = 0;
           isDoorTrulyOpen = false;
+          digitalWrite(BUZZER_PIN, LOW);  // Ensure buzzer is off
           esp_err_t result = esp_now_send(peerMac, &currentUnlockState, sizeof(currentUnlockState));
 
           Serial.print("Sent currentUnlockState = ");
           Serial.print(currentUnlockState);
           Serial.print("  result = ");
           Serial.println(result == ESP_OK ? "OK" : "ERROR");
-        } else if (now - detectStart >= 5000) {
+        } else if (now - detectStart >= CLOSE_DETECT_TIME) {
           // Not continous for 5 seconds, reset
           Serial.println("IR detection unstable, resetting counters.");
           resultCounter = 0;
@@ -154,11 +166,29 @@ void loop() {
       window_gap = now;
       detectCount = 0;
     }
+
+    if (now - openStart >= MAX_OPEN_TIME && isDoorTrulyOpen) {
+      unsigned long currentMillis = millis();
+
+      // --- BUZZER TOGGLE TASK (runs in background) ---
+      if (currentMillis - previousMillis >= interval) {
+        previousMillis = currentMillis;
+
+        // Toggle buzzer state
+        buzzerState = !buzzerState;
+        digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW);
+      }  
+    }
     delay(1);
   } else {
     // Door is closed, do nothing
-    window_gap = 0;
-    isFirstTime = true;
+    window_gap     = 0;
+    openStart      = 0;
+    detectStart    = 0;
+    detectCount    = 0;
+    resultCounter  = 0;
+    isDoorTrulyOpen = false;
+    digitalWrite(BUZZER_PIN, LOW);
     delay(100);
   }
 }
