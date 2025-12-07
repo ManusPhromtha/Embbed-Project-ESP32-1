@@ -126,7 +126,7 @@ void loop() {
       Serial.println(")");
       
       if (result == 1) {
-        if (resultCounter == 0) detectStart = millis();
+        if (resultCounter == 0) detectStart = now;
         resultCounter++;
         if (now - detectStart >= 5000 && resultCounter >= 5) {
           Serial.println("Door has been closed now.");
@@ -144,6 +144,8 @@ void loop() {
           resultCounter = 0;
           detectStart = 0;
         }
+
+        Serial.println(now - detectStart);
       } else {
         // Reset for next window
         resultCounter = 0;
