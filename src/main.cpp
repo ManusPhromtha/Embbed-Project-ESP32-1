@@ -1,88 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 
 #define IR_RECV_PIN       5   // KY-022 OUT
 #define BUZZER_PIN       21   // KY-022 OUT
 
 #define LEAST_DETECT_COUNT 8 // Per 1000 ms
 #define CLOSE_DETECT_TIME  4000
-#define MAX_OPEN_TIME  30000
-
-// ==================== CONFIG ====================
-const char* ssid         = "TY7373_2.4G";
-const char* password     = "0933897373";
-
-const char* mqtt_server  = "mqtt.netpie.io";
-const int   mqtt_port    = 1883;
-const char* client_id    = "2e551e86-cfa3-41a2-b9b0-cc086ebf6b2c";
-const char* device_token = "24R9C4Z1RkuqTU2FumuhCEA6crsZwFaG";
-const char* device_secret= "AimrD3qZSbFx9qfGy7nMaNR7zQTrnq85";
-
-// ==================== GLOBAL VARS ====================
-WiFiClient   espClient;
-PubSubClient client(espClient);
-WiFiUDP      ntpUDP;
-NTPClient    timeClient(ntpUDP, "pool.ntp.org", 7 * 3600); // GMT+7
-
-// Params for MQTT message
-int alarmCount = 0;
-
-// ==================== WIFI ====================
-void connectWiFi() {
-  Serial.print("Connecting to WiFi...");
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nConnected to WiFi");
-}
-
-// ==================== SHADOW UPDATE ====================
-void updateShadow() {
-  StaticJsonDocument<256> doc;
-
-  JsonObject data = doc["data"].to<JsonObject>();
-  JsonObject stat = data["stat"].to<JsonObject>();
-
-  stat["alarmCount"] = alarmCount;
-
-  char jsonBuffer[512];
-  size_t n = serializeJson(doc, jsonBuffer, sizeof(jsonBuffer));
-
-  if (n == 0) {
-    Serial.println("Failed to serialize JSON (buffer too small?)");
-    return;
-  }
-
-  client.publish("@shadow/data/update", jsonBuffer);
-  Serial.print("Sent Update to NETPIE: ");
-  Serial.println(jsonBuffer);
-}
-
-
-// ==================== MQTT CONNECT ====================
-void connectMQTT() {
-  while (!client.connected()) {
-    Serial.print("Connecting to NETPIE...");
-    if (client.connect(client_id, device_token, device_secret)) {
-      Serial.println(" connected");
-
-      // Reset dashboard on connect
-      updateShadow();
-    } else {
-      Serial.print(" failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 2 seconds");
-      delay(2000);
-    }
-  }
-}
+#define MAX_OPEN_TIME  10000
 
 
 // ==================== MODULE SETUP ====================
@@ -100,12 +25,18 @@ bool isDoorTrulyOpen = false;
 
 unsigned long previousMillis = 0;
 const unsigned long interval = 500;  // 500 ms ON/OFF interval
+
 bool buzzerState = false;
 
 // Check send status
 void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
   Serial.print("Send status: ");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "SUCCESS" : "FAIL");
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    //resent
+    delay(1000);
+    esp_err_t result = esp_now_send(peerMac, &currentUnlockState, sizeof(currentUnlockState));
+  }
 }
 
 // Called when *this* ESP32 receives data from the peer
@@ -124,13 +55,6 @@ void setup() {
 
   // Wi-Fi setup
   WiFi.mode(WIFI_STA);
-
-  connectWiFi();
-
-  timeClient.begin();
-  timeClient.update();
-
-  client.setServer(mqtt_server, mqtt_port);
 
   Serial.print("This board MAC: ");
   Serial.println(WiFi.macAddress());
@@ -168,12 +92,6 @@ void setup() {
 
 
 void loop() {
-  if (!client.connected()) {
-    connectMQTT();
-  }
-  client.loop();
-  timeClient.update();
-
   if (currentUnlockState == 1 && isDoorTrulyOpen == false) {
     // Lock is open, Door is open?
     if (window_gap == 0) window_gap = millis();
@@ -244,7 +162,7 @@ void loop() {
           Serial.print(currentUnlockState);
           Serial.print("  result = ");
           Serial.println(result == ESP_OK ? "OK" : "ERROR");
-          updateShadow();
+          
         } else if (now - detectStart >= CLOSE_DETECT_TIME) {
           // Not continous for 5 seconds, reset
           Serial.println("IR detection unstable, resetting counters.");
@@ -272,11 +190,8 @@ void loop() {
         // Toggle buzzer state
         buzzerState = !buzzerState;
         digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW);
-        if (buzzerState) {
-          alarmCount++;
-        }
-      }  
-    }
+      }
+    }  
     delay(1);
   } else {
     // Door is closed, do nothing
@@ -285,7 +200,6 @@ void loop() {
     detectStart    = 0;
     detectCount    = 0;
     resultCounter  = 0;
-    alarmCount      = 0;
     isDoorTrulyOpen = false;
     digitalWrite(BUZZER_PIN, LOW);
     delay(100);
